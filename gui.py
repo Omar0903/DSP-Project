@@ -1,168 +1,157 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from functions import *
+import numpy as np
+import os
 import matplotlib.pyplot as plt
-from functions import PreprocessEcg, TrainModels, PredictFile, PrepareTrainingData
-
-# Create the main Tkinter window
-root = tk.Tk()
-root.title("ECG Signal Prediction")
-root.geometry("1920x1280")
-root.config(background='navajowhite')
+from tkinter import filedialog, messagebox, Tk, Label, Button, Entry
 
 
-# Create some GUI elements
-labelWidget = tk.Label(root, text="Select ECG File:")
-labelWidget.place(x=910, y=20)
+# Add function to display predictions in Tkinter window
+def DisplayPredictedFile(knnPredictions):
+    # Count the most frequent prediction for each segment
+    counts = np.bincount(knnPredictions)
 
-entryFilePath = tk.Entry(root, width=50)
-entryFilePath.place(x=770, y=60)
+    # Majority class from KNN predictions
+    majorityClass = np.argmax(counts)
 
-btnSelectFile = tk.Button(root, text="Browse", command=lambda: entryFilePath.insert(0, filedialog.askopenfilename(title="Select ECG File", filetypes=(("Text Files", "*.txt"), ("All Files", "*.*")))))
-btnSelectFile.place(x=915, y=100)
+    fileMap = {0: "s1", 1: "s2", 2: "s3"}
+    predictedFile = fileMap.get(majorityClass, "Unknown")
 
-# Create figures (empty initially, will update later)
-fig1 = plt.Figure(figsize=(4, 4), dpi=100)
-ax1 = fig1.add_subplot(111)
-ax1.set_title("Original ECG Signal")
-ax1.set_xlabel("Sample index")
-ax1.set_ylabel("Amplitude")
+    return predictedFile
 
-fig2 = plt.Figure(figsize=(4, 4), dpi=100)
-ax2 = fig2.add_subplot(111)
-ax2.set_title("Resampled ECG Signal")
-ax2.set_xlabel("Sample index")
-ax2.set_ylabel("Amplitude")
 
-fig3 = plt.Figure(figsize=(4, 4), dpi=100)
-ax3 = fig3.add_subplot(111)
-ax3.set_title("Filtered ECG Signal")
-ax3.set_xlabel("Sample index")
-ax3.set_ylabel("Amplitude")
-
-fig4 = plt.Figure(figsize=(4, 4), dpi=100)
-ax4 = fig4.add_subplot(111)
-ax4.set_title("Normalized ECG Signal")
-ax4.set_xlabel("Sample index")
-ax4.set_ylabel("Amplitude")
-
-# Integrate the figures with Tkinter window using FigureCanvasTkAgg
-canvas1 = FigureCanvasTkAgg(fig1, master=root)
-canvas1.get_tk_widget().place(x=10, y=500)  # Positioning the first plot
-canvas1.draw()
-
-canvas2 = FigureCanvasTkAgg(fig2, master=root)
-canvas2.get_tk_widget().place(x=420, y=500)  # Positioning the second plot
-canvas2.draw()
-
-canvas3 = FigureCanvasTkAgg(fig3, master=root)
-canvas3.get_tk_widget().place(x=830, y=500)  # Positioning the third plot
-canvas3.draw()
-
-canvas4 = FigureCanvasTkAgg(fig4, master=root)
-canvas4.get_tk_widget().place(x=1240, y=500)  # Positioning the fourth plot
-canvas4.draw()
-
-# Initialize KNN and SVM models and their accuracies
-knn, svm, knnAccuracy, svmAccuracy = TrainModels()
-
-# Function for "Start Prediction" button (performs prediction only)
-def StartPrediction():
-    # Get the file path from entryFilePath
-    filePath = entryFilePath.get().strip()
-
+# Modify the StartPrediction function to integrate the DisplayPredictedFile with KNN only
+def StartPrediction(knn, svm, filePath):
     if not filePath:
-        messagebox.showerror("Error", "Please select a valid ECG file.")
+        messagebox.showerror("Error", "Please provide a valid file path.")
         return
-    
-    try:
-        # Use PredictFile function for prediction
-        knnPredictedLabel, svmPredictedLabel = PredictFile(filePath, knn, svm)
-        
-        # Predicted class labels for KNN and SVM
-        predictedClassKnn = f"s{knnPredictedLabel + 1}"
-        predictedClassSvm = f"s{svmPredictedLabel + 1}"
-        
-        # Determine the training file most similar to the test file based on prediction
-        if knnPredictedLabel == 0:
-            trainingFile = "s1.txt"
-        elif knnPredictedLabel == 1:
-            trainingFile = "s2.txt"
-        else:
-            trainingFile = "s3.txt"
-        
-        # Show message box with prediction result and training file match
-        messagebox.showinfo("Prediction Results", 
-                            f"Predicted by KNN: {predictedClassKnn}\nPredicted by SVM: {predictedClassSvm}\n"
-                            f"Test file is most similar to: {trainingFile}")
-        
-        # Update plots after prediction
-        UpdatePlots(filePath)
 
-    except Exception as e:
-        messagebox.showerror("Error", f"An error occurred during processing: {e}")
+    if not os.path.exists(filePath):
+        messagebox.showerror(
+            "Error", "Test file does not exist. Please provide a valid file path."
+        )
+        return
 
-# Function to update plots after prediction
-def UpdatePlots(filePath):
     try:
-        # Load the signal data from the selected file
+        # Use only KNN predictions to determine the majority class
+        knnPredictions, _ = PredictFile(filePath, knn, svm)
+
+        print("Predictions for each segment (KNN):")
+        for i, knnPred in enumerate(knnPredictions, 1):
+            print(f"Segment {i}: KNN -> s{knnPred + 1}")
+
+        # Display the predicted file based on majority prediction from KNN
+        predictedFile = DisplayPredictedFile(knnPredictions)
+        print(f"\nThe ECG signal is most likely from {predictedFile}.\n")
+
+        # Show the message box with the prediction result
+        messagebox.showinfo(
+            "Prediction Result", f"The ECG signal is most likely from {predictedFile}."
+        )
+
         with open(filePath, "r") as file:
-            signalData = [float(value) for value in file.read().strip().split()]
-        
-        # Preprocess the signal
-        normalizedSignal, signals = PreprocessEcg(signalData)
-        
-        # Update the plots
-        ax1.clear()
-        ax1.plot(signalData)
-        ax1.set_title("Original ECG Signal")
-        ax1.set_xlabel("Sample index")
-        ax1.set_ylabel("Amplitude")
-        
-        ax2.clear()
-        ax2.plot(signals["resampled"])
-        ax2.set_title("Resampled ECG Signal")
-        ax2.set_xlabel("Sample index")
-        ax2.set_ylabel("Amplitude")
-        
-        ax3.clear()
-        ax3.plot(signals["filtered"])
-        ax3.set_title("Filtered ECG Signal")
-        ax3.set_xlabel("Sample index")
-        ax3.set_ylabel("Amplitude")
-        
-        ax4.clear()
-        ax4.plot(signals["normalized"])
-        ax4.set_title("Normalized ECG Signal")
-        ax4.set_xlabel("Sample index")
-        ax4.set_ylabel("Amplitude")
-        
-        # Redraw the plots
-        canvas1.draw()
-        canvas2.draw()
-        canvas3.draw()
-        canvas4.draw()
+            signalData = np.array(
+                [float(value) for value in file.read().strip().split()]
+            )
+
+        _, signals = PreprocessEcg(signalData)
+
+        # Plot the figures with larger size
+        plt.figure(figsize=(10, 6))
+        plt.plot(signalData)
+        plt.title("Original ECG Signal")
+        plt.xlabel("Sample index")
+        plt.ylabel("Amplitude")
+        plt.show()
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(signals["resampled"])
+        plt.title("Resampled ECG Signal")
+        plt.xlabel("Sample index")
+        plt.ylabel("Amplitude")
+        plt.show()
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(signals["filtered"])
+        plt.title("Filtered ECG Signal")
+        plt.xlabel("Sample index")
+        plt.ylabel("Amplitude")
+        plt.show()
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(signals["normalized"])
+        plt.title("Normalized ECG Signal")
+        plt.xlabel("Sample index")
+        plt.ylabel("Amplitude")
+        plt.show()
 
     except Exception as e:
         messagebox.showerror("Error", f"An error occurred during processing: {e}")
 
-# Function to show training accuracy for KNN and SVM
-def ShowAccuracy():
-    try:
-        # Show training accuracy for both models
-        messagebox.showinfo("Training Accuracy", 
-                            f"KNN Training Accuracy: {knnAccuracy * 100:.2f}%\n"
-                            f"SVM Training Accuracy: {svmAccuracy * 100:.2f}%")
-    except Exception as e:
-        messagebox.showerror("Error", f"An error occurred: {e}")
 
-# Button to start prediction (performs only the prediction)
-btnPredict = tk.Button(root, text="Start Prediction", command=StartPrediction)
-btnPredict.place(x=780, y=200)
+# Function to show accuracy of the models
+def ShowAccuracy(knnAccuracy, svmAccuracy, treeAccuracy):
+    messagebox.showinfo(
+        "Training Accuracy",
+        f"KNN Accuracy: {knnAccuracy * 100:.2f}%\n"
+        f"SVM Accuracy: {svmAccuracy * 100:.2f}%\n"
+        f"Decision Tree Accuracy: {treeAccuracy * 100:.2f}%",
+    )
 
-# Button to show training accuracy
-btnShowAccuracy = tk.Button(root, text="Show Accuracy", command=ShowAccuracy)
-btnShowAccuracy.place(x=980, y=200)
 
-# Run Tkinter window
-root.mainloop()
+# Function to select file using Entry
+def BrowseFile(entryWidget):
+    filePath = filedialog.askopenfilename(
+        title="Select ECG File",
+        filetypes=(("Text Files", "*.txt"), ("All Files", "*.*")),
+    )
+    if filePath:
+        entryWidget.delete(0, "end")  # Clear previous file path
+        entryWidget.insert(
+            0, filePath
+        )  # Insert the new file path into the Entry widget
+
+
+# GUI Initialization
+def Main():
+    root = Tk()
+    root.title("ECG Signal Prediction")
+    root.geometry("500x500")
+    root.config(background="navajowhite")
+
+    # Label for Entry Widget
+    Label(root, text="Enter ECG File Path:").pack(pady=5)
+
+    # Entry Widget for file path
+    filePathEntry = Entry(root, width=50)
+    filePathEntry.pack(pady=5)
+
+    # Button for Browse File
+    browseButton = Button(
+        root, text="Browse File", command=lambda: BrowseFile(filePathEntry)
+    )
+    browseButton.pack(pady=5)
+
+    # Button for Show Accuracy
+    accuracyButton = Button(
+        root,
+        text="Show Accuracy",
+        command=lambda: ShowAccuracy(knnAccuracy, svmAccuracy, treeAccuracy),
+    )
+    accuracyButton.place(x=280,y=350)
+
+    # Button for Start Prediction
+    startButton = Button(
+        root,
+        text="Start Prediction",
+        command=lambda: StartPrediction(knn, svm, filePathEntry.get()),
+    )
+    startButton.place(x=400,y=350)
+
+    # Train models and get accuracies
+    knn, svm, tree, knnAccuracy, svmAccuracy, treeAccuracy = TrainModels()
+
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    Main()

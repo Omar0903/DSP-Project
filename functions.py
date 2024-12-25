@@ -2,8 +2,9 @@ import numpy as np
 import os
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score
-from scipy.signal import decimate, butter, filtfilt
+from scipy.signal import resample, butter, filtfilt
 from scipy.fftpack import dct
 import matplotlib.pyplot as plt
 from tkinter import filedialog, messagebox
@@ -13,7 +14,8 @@ def PreprocessEcg(EcgSignal, SamplingRate=1000, DownsampleFactor=2):
 
     # Down-sampling
     if DownsampleFactor > 1:
-        EcgSignal = decimate(EcgSignal, DownsampleFactor)
+        NewLength = len(EcgSignal) // DownsampleFactor
+        EcgSignal = resample(EcgSignal, NewLength)
     Signals["resampled"] = EcgSignal
 
     # Remove DC component (mean)
@@ -22,8 +24,9 @@ def PreprocessEcg(EcgSignal, SamplingRate=1000, DownsampleFactor=2):
     # Bandpass filter to remove noise (1-40 Hz)
     Lowcut = 1.0
     Highcut = 40.0
-    Low = Lowcut / (SamplingRate)
-    High = Highcut / (SamplingRate)
+    NyquistRate = SamplingRate / 2  # Nyquist frequency
+    Low = Lowcut / NyquistRate
+    High = Highcut / NyquistRate
     B, A = butter(4, [Low, High], btype="band")
     FilteredSignal = filtfilt(B, A, EcgSignal)
     Signals["filtered"] = FilteredSignal
@@ -34,15 +37,18 @@ def PreprocessEcg(EcgSignal, SamplingRate=1000, DownsampleFactor=2):
 
     return NormalizedSignal, Signals
 
-def SegmentEcgData(EcgSignal, SegmentLength=500):
+
+def SegmentEcgData(EcgSignal, SegmentLength=400):
     NumSegments = len(EcgSignal) // SegmentLength
     return [EcgSignal[i * SegmentLength:(i + 1) * SegmentLength] for i in range(NumSegments)]
+
 
 def ExtractFeatures(EcgSegment):
     Autocorr = np.correlate(EcgSegment, EcgSegment, mode='full')
     Autocorr = Autocorr[Autocorr.size // 2:]
     DctCoeffs = dct(Autocorr, norm='ortho')
     return DctCoeffs[:10]
+
 
 def PrepareTrainingData(FilePaths):
     Features = []
@@ -59,72 +65,81 @@ def PrepareTrainingData(FilePaths):
             Labels.append(Idx)
     return np.array(Features), np.array(Labels)
 
+
 def PredictFile(FilePath, KnnModel, SvmModel):
     with open(FilePath, "r") as File:
         SignalData = np.array([float(Value) for Value in File.read().strip().split()])
     PreprocessedSignal, _ = PreprocessEcg(SignalData)
     Segments = SegmentEcgData(PreprocessedSignal)
     TestFeatures = [ExtractFeatures(Segment) for Segment in Segments]
+    
     KnnPredictions = KnnModel.predict(TestFeatures)
     SvmPredictions = SvmModel.predict(TestFeatures)
-    KnnMajorityLabel = np.argmax(np.bincount(KnnPredictions))
-    SvmMajorityLabel = np.argmax(np.bincount(SvmPredictions))
-    return KnnMajorityLabel, SvmMajorityLabel
+    
+    return KnnPredictions, SvmPredictions
+
 
 def TrainModels():
-    # Define training files
     TrainingFiles = ["s1.txt", "s2.txt", "s3.txt"]
 
-    # Prepare training data
     X, Y = PrepareTrainingData(TrainingFiles)
 
-    # Train KNN classifier
     Knn = KNeighborsClassifier(n_neighbors=3)
     Knn.fit(X, Y)
 
-    # Train SVM classifier
     Svm = SVC(kernel="linear", probability=True)
     Svm.fit(X, Y)
 
-    # Calculate and display accuracy for both models
+    Tree = DecisionTreeClassifier()
+    Tree.fit(X, Y)
+
     KnnAccuracy = accuracy_score(Y, Knn.predict(X))
     SvmAccuracy = accuracy_score(Y, Svm.predict(X))
+    TreeAccuracy = accuracy_score(Y, Tree.predict(X))
 
-    return Knn, Svm, KnnAccuracy, SvmAccuracy
+    return Knn, Svm, Tree, KnnAccuracy, SvmAccuracy, TreeAccuracy
 
-def ShowAccuracy(KnnAccuracy, SvmAccuracy):
-    messagebox.showinfo("Successful", f"KNN Training Accuracy: {KnnAccuracy * 100:.2f}%\nSVM Training Accuracy: {SvmAccuracy * 100:.2f}%")
+
+def ShowAccuracy(KnnAccuracy, SvmAccuracy, TreeAccuracy):
+    messagebox.showinfo("Training Accuracy", f"KNN Accuracy: {KnnAccuracy * 100:.2f}%\n"
+                                             f"SVM Accuracy: {SvmAccuracy * 100:.2f}%\n"
+                                             f"Decision Tree Accuracy: {TreeAccuracy * 100:.2f}%")
 
 def SelectFile():
-    # Open a file dialog for the user to select a test ECG file
     FilePath = filedialog.askopenfilename(title="Select ECG File", filetypes=(("Text Files", "*.txt"), ("All Files", "*.*")))
     return FilePath
+
 
 def StartPrediction(Knn, Svm):
     TestFilePath = SelectFile()
 
     if not TestFilePath:
-        return  # Exit if no file was selected
+        return
 
     if not os.path.exists(TestFilePath):
         messagebox.showerror("Error", "Test file does not exist. Please provide a valid file path.")
         return
 
     try:
-        # Predict the file label using both models
-        KnnPredictedLabel, SvmPredictedLabel = PredictFile(TestFilePath, Knn, Svm)
+        KnnPredictions, SvmPredictions = PredictFile(TestFilePath, Knn, Svm)
         
-        # Display both predictions
-        messagebox.showinfo("Prediction Results", f"Predicted by KNN: s{KnnPredictedLabel + 1}\nPredicted by SVM: s{SvmPredictedLabel + 1}")
+        print("Predictions for each segment:")
+        for i, (knn_pred, svm_pred) in enumerate(zip(KnnPredictions, SvmPredictions), 1):
+            print(f"Segment {i}: KNN -> s{knn_pred + 1}, SVM -> s{svm_pred + 1}")
         
-        # Load and preprocess the test signal for plotting
+        KnnPredictionStr = "\n".join([f"Segment {i+1}: s{Label + 1}" for i, Label in enumerate(KnnPredictions)])
+        SvmPredictionStr = "\n".join([f"Segment {i+1}: s{Label + 1}" for i, Label in enumerate(SvmPredictions)])
+        
+        messagebox.showinfo(
+            "Prediction Results", 
+            f"KNN Predictions:\n{KnnPredictionStr}\n\nSVM Predictions:\n{SvmPredictionStr}"
+        )
+
         with open(TestFilePath, "r") as File:
             SignalData = np.array([float(Value) for Value in File.read().strip().split()])
         
-        # Preprocess the signal and retrieve the different stages
         _, Signals = PreprocessEcg(SignalData)
         
-        # Plot the signals
         plt.figure()
         plt.plot(SignalData)
         plt.title("Original ECG Signal")
@@ -155,3 +170,9 @@ def StartPrediction(Knn, Svm):
 
     except Exception as e:
         messagebox.showerror("Error", f"An error occurred during processing: {e}")
+
+
+if __name__ == "__main__":
+    Knn, Svm, Tree, KnnAccuracy, SvmAccuracy, TreeAccuracy = TrainModels()
+    ShowAccuracy(KnnAccuracy, SvmAccuracy, TreeAccuracy)
+    StartPrediction(Knn, Svm)
